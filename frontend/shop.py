@@ -11,22 +11,10 @@ from pyscript import document, window, when, fetch
 from pyscript.ffi import create_proxy
 
 API = ""  # same origin as the Flask app
-STATIC = "/"
-
-CATEGORY_NAMES = {"pork": "Pork", "chicken": "Chicken", "sausage": "Hotdogs & Sausages",
-                  "beef": "Beef", "fish": "Fish", "other": "Other products"}
-CATEGORY_ORDER = ["pork", "chicken", "sausage", "beef", "fish", "other"]
-# The API has no category field, so a product's category is guessed from its name.
-# Checked in order, so "Chicken Hotdog" lands in sausage before chicken.
-KEYWORDS = [
-    ("sausage", ("hotdog", "chorizo", "longaniza", "sausage")),
-    ("chicken", ("chicken",)),
-    ("fish", ("tuna", "fish", "panga", "bangus", "tilapia", "salmon")),
-    ("beef", ("beef", "hamburger", "patties")),
-    ("pork", ("pork", "pata", "giniling", "kasim", "liempo", "humba", "ham", "bacon")),
-]
+STATIC = "/"  # Flask serves the frontend folder from the site root
 
 products = []  # loaded from /api/products
+categories = []  # [{"id": "1", "name": "Pork"}] from /api/categories
 cart = {}  # product id (text) -> quantity
 details = {}  # customer details waiting for confirmation
 drafts = {}  # product id -> quantity typed in the popup (kept when it closes)
@@ -45,12 +33,14 @@ def esc(s):
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
-def category_of(name):
+def category_key(name):
     low = name.lower()
-    for cat, words in KEYWORDS:
+    for key, words in (("sausage", ("hotdog", "chorizo", "longaniza", "sausage")),
+                       ("chicken", ("chicken",)), ("fish", ("fish", "tuna")),
+                       ("beef", ("beef",)), ("pork", ("pork",))):
         for w in words:
             if w in low:
-                return cat
+                return key
     return "other"
 
 
@@ -70,6 +60,25 @@ def price_text(p):
     return "%s / %s" % (peso(p["price"]), p["unit"])
 
 
+def price_change(p):
+    """'up', 'down' or None, from the API's previous_price."""
+    prev = p.get("prev")
+    if prev is None or p["price"] is None or prev == p["price"]:
+        return None
+    return "up" if p["price"] > prev else "down"
+
+
+def change_chip(p):
+    c = price_change(p)
+    if not c:
+        return ""
+    word = "Price raised" if c == "up" else "Price lowered"
+    return (
+        '<span class="chg %s"><span aria-hidden="true">%s</span>'
+        '<span class="sr">%s, </span>was <s>%s</s></span>'
+    ) % (c, "▲" if c == "up" else "▼", word, peso(p["prev"]))
+
+
 def add_btn(p):
     if p["price"] is None:
         return '<button class="btn small" disabled>Unavailable</button>'
@@ -77,7 +86,12 @@ def add_btn(p):
 
 
 def photo(src, text):
-    return '<div class="photo">%s<img src="%s" alt="" onerror="this.remove()"></div>' % (text, src)
+    img = '<img src="%s" alt="" onerror="this.remove()">' % esc(src) if src else ""
+    return '<div class="photo">%s%s</div>' % (text, img)
+
+
+def product_photo(p):
+    return photo(p["img"], "Product photo")  # img_url from the API, e.g. /images/pata.jpg
 
 
 def toast(text):
@@ -125,29 +139,42 @@ async def load_products():
         res = await fetch(API + "/api/products")
         if not res.ok:
             raise ValueError("bad status")
-        data = await res.json()
+        data = json.loads(await res.text())
     except Exception:
         q("#category-grid").innerHTML = (
             '<p class="empty">Could not load products. Check your connection, then refresh the page.</p>')
         return
+    names = {}
+    try:
+        cres = await fetch(API + "/api/categories")
+        if cres.ok:
+            for c in json.loads(await cres.text()):
+                names[str(c["category_id"])] = c["name"]
+                categories.append({"id": str(c["category_id"]), "name": c["name"], "key": category_key(c["name"])})
+    except Exception:
+        pass  # products still show, grouped as "Other products"
     for d in data:
+        cid = str(d.get("category_id"))
         products.append({
             "id": str(d["product_id"]), "pid": d["product_id"], "name": d["name"],
-            "unit": d["unit"], "price": d["price"], "cat": category_of(d["name"]),
-            "img_url": d.get("img_url"),
+            "unit": d["unit"], "price": d["price"], "cat": cid if cid in names else "other",
+            "img": d.get("img_url") or "", "prev": d.get("previous_price"),
         })
+    if [p for p in products if p["cat"] == "other"]:
+        categories.append({"id": "other", "name": "Other products", "key": "other"})
     render_categories()
 
 
 # ---------- rendering ----------
 def render_categories():
     html = ""
-    for cid in CATEGORY_ORDER:
-        n = len([p for p in products if p["cat"] == cid])
+    for c in categories:
+        n = len([p for p in products if p["cat"] == c["id"]])
         if n:
             html += (
-                '<button class="cat-card" data-cat="%s">%s<h3>%s</h3><p>%d products</p></button>'
-            ) % (cid, photo(STATIC + "images/%s.jpg" % cid, "Category photo"), CATEGORY_NAMES[cid], n)
+                '<button class="cat-card" data-cat="%s">%s<h3>%s</h3><p>%d %s</p></button>'
+            ) % (c["id"], photo(STATIC + "images/%s.jpg" % c["key"], "Category photo"), esc(c["name"]), n,
+                 "product" if n == 1 else "products")
     q("#category-grid").innerHTML = html or '<p class="empty">No products yet. Please check back soon.</p>'
 
 
@@ -157,11 +184,11 @@ def show_category(cid):
         html += (
             '<article class="pcard"><button class="pcard-main" data-open="%s" aria-label="View details for %s">'
             "%s<h3>%s</h3></button>"
-            '<div class="meta"><span class="price">%s</span>%s</div></article>'
-        ) % (p["id"], esc(p["name"]), photo(p.get("img_url") or "", "Product photo"),
-             esc(p["name"]), price_text(p), add_btn(p))
+            '<div class="meta"><div><span class="price">%s</span>%s</div>%s</div></article>'
+        ) % (p["id"], esc(p["name"]), product_photo(p), esc(p["name"]),
+             price_text(p), change_chip(p), add_btn(p))
     q("#product-grid").innerHTML = html
-    q("#product-title").innerText = CATEGORY_NAMES[cid]
+    q("#product-title").innerText = [c["name"] for c in categories if c["id"] == cid][0]
     q("#category-view").classList.add("hidden")
     q("#product-view").classList.remove("hidden")
     q("#products").scrollIntoView()
@@ -234,10 +261,10 @@ def on_product(event):
             ) % (dq, p["price"], p["id"], peso(p["price"] * dq), dq, peso(p["price"]), p["id"])
         dlg.innerHTML = (
             '<div class="dlg-inner"><div class="dlg-head"><h3>%s</h3><button class="x" data-close="product-dialog" aria-label="Close">&times;</button></div>'
-            '<div class="dlg-body">%s<dl><dt>Price</dt><dd>%s</dd><dt>Sold as</dt><dd>%s</dd>'
+            '<div class="dlg-body">%s<dl><dt>Price</dt><dd>%s%s</dd><dt>Sold as</dt><dd>%s</dd>'
             "<dt>Storage</dt><dd>Keep frozen at -18°C or colder</dd></dl></div>%s</div>"
-        ) % (esc(p["name"]), photo(p.get("img_url") or "", "Product photo"),
-             price_text(p), esc(p["unit"]), actions)
+        ) % (esc(p["name"]), product_photo(p),
+             price_text(p), change_chip(p), esc(p["unit"]), actions)
         dlg.showModal()
 
 
@@ -375,7 +402,7 @@ async def on_confirm(event):
         fail("Could not reach the shop. Check your connection and try again.", btn)
         return
     try:
-        data = await res.json()
+        data = json.loads(await res.text())
     except Exception:
         data = {}
     if not res.ok:
@@ -426,7 +453,7 @@ async def on_track(event):
     if not res.ok:
         out.innerHTML = '<p class="err">No reservation found for that RTN. Check the code and try again.</p>'
         return
-    data = await res.json()
+    data = json.loads(await res.text())
     lines = []
     total = 0
     for it in data["items"]:

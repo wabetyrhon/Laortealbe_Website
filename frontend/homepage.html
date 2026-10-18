@@ -25,9 +25,10 @@
 </header>
 
 <section id="home" class="hero">
-  <div class="hero-ph">Promo video placeholder (/promo.mp4)</div>
-  <video autoplay muted loop playsinline poster="/images/hero-poster.jpg" onerror="this.remove()">
-    <source src="/promo.mp4" type="video/mp4">
+  <!-- PROMO VIDEO: put the file at frontend/promo_video.mp4 (not inside images/) -->
+  <div class="hero-ph">Promo video placeholder (promo_video.mp4)</div>
+  <video autoplay muted loop playsinline>
+    <source src="/promo_video.mp4" type="video/mp4" onerror="this.parentElement.remove()">
   </video>
   <div class="hero-text">
     <h1>Frozen meat, reserved in a minute.</h1>
