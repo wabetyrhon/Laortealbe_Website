@@ -11,11 +11,15 @@ This is Laortealbe Meatshop a online website food shop where you can order diffe
 - Python
 
 ## How to run or test
+### Locally
 1. git clone https://github.com/wabetyrhon/Laortealbe_Website
 2. cd Laortealbe_Website
 3. python -m pip install -r requirements.txt
 4. create/configure a .env file (see .env.example)
 5. python -m flask run
+
+### Deployment URL
+- "https://laortealbe.onrender.com/"
 
 ## Description
 This build is made for a feasibility business which we have conjured up for this project. It is a virtual website-based market for a usual meat store that offers different types of meat, where customers can order the products they want.
